@@ -1,23 +1,12 @@
 /**
- *Submitted for verification at BscScan.com on 2021-07-07
-*/
-
-/*
-
-WraithCoin is built upon the fundamentals of Buyback and increasing the investor's value
-    
-Main features are
-    
-1) 2% tax is collected and distributed to holders for HODLing
-2) 6% buyback and marketing tax is collected and 3% of it is sent for marketing fund and other 3% is used to buyback the tokens                                                  
-
+ *Submitted for verification at BscScan.com on 2021-07-14
 */
 
 // SPDX-License-Identifier: Unlicensed
-
 pragma solidity ^0.8.4;
 
-contract Context {
+abstract contract Context {
+
     function _msgSender() internal view virtual returns (address payable) {
         return payable(msg.sender);
     }
@@ -27,7 +16,6 @@ contract Context {
         return msg.data;
     }
 }
-
 
 interface IERC20 {
 
@@ -39,8 +27,6 @@ interface IERC20 {
     function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
     event Transfer(address indexed from, address indexed to, uint256 value);
     event Approval(address indexed owner, address indexed spender, uint256 value);
-    
-
 }
 
 library SafeMath {
@@ -73,7 +59,6 @@ library SafeMath {
 
         return c;
     }
-
 
     function div(uint256 a, uint256 b) internal pure returns (uint256) {
         return div(a, b, "SafeMath: division by zero");
@@ -117,7 +102,6 @@ library Address {
         (bool success, ) = recipient.call{ value: amount }("");
         require(success, "Address: unable to send value, recipient may have reverted");
     }
-
 
     function functionCall(address target, bytes memory data) internal returns (bytes memory) {
       return functionCall(target, data, "Address: low-level call failed");
@@ -212,8 +196,6 @@ contract Ownable is Context {
     }
 }
 
-// pragma solidity >=0.5.0;
-
 interface IUniswapV2Factory {
     event PairCreated(address indexed token0, address indexed token1, address pair, uint);
 
@@ -229,9 +211,6 @@ interface IUniswapV2Factory {
     function setFeeTo(address) external;
     function setFeeToSetter(address) external;
 }
-
-
-// pragma solidity >=0.5.0;
 
 interface IUniswapV2Pair {
     event Approval(address indexed owner, address indexed spender, uint value);
@@ -281,8 +260,6 @@ interface IUniswapV2Pair {
 
     function initialize(address, address) external;
 }
-
-// pragma solidity >=0.6.2;
 
 interface IUniswapV2Router01 {
     function factory() external pure returns (address);
@@ -378,10 +355,6 @@ interface IUniswapV2Router01 {
     function getAmountsIn(uint amountOut, address[] calldata path) external view returns (uint[] memory amounts);
 }
 
-
-
-// pragma solidity >=0.6.2;
-
 interface IUniswapV2Router02 is IUniswapV2Router01 {
     function removeLiquidityETHSupportingFeeOnTransferTokens(
         address token,
@@ -423,18 +396,20 @@ interface IUniswapV2Router02 is IUniswapV2Router01 {
     ) external;
 }
 
-contract WraithCoin is Context, IERC20, Ownable {
+contract WRAITH is Context, IERC20, Ownable {
+    
     using SafeMath for uint256;
     using Address for address;
     
-    address payable public marketingAddress = payable(0x4C2B43eb496b812E3B750f07F4279D74798b5126); // Marketing Address
-    address public deadAddress = 0x000000000000000000000000000000000000dEaD;
+    address payable public marketingWalletAddress = payable(0x792Ca25b3329351001A8E88C5fE97DaD45425038); // Marketing Address
+    address payable public wraithCharityWalletAddress = payable(0x6ADbe03EC04322322f5258c49F3508d33605BCbb); // wraith Address
+    address public immutable deadAddress = 0x000000000000000000000000000000000000dEaD;
+    
     mapping (address => uint256) private _rOwned;
     mapping (address => uint256) private _tOwned;
     mapping (address => mapping (address => uint256)) private _allowances;
 
     mapping (address => bool) private _isExcludedFromFee;
-
     mapping (address => bool) private _isExcluded;
     address[] private _excluded;
    
@@ -447,29 +422,23 @@ contract WraithCoin is Context, IERC20, Ownable {
     string private _symbol = "WRAITH";
     uint8 private _decimals = 9;
 
+    uint256 public _burnFee = 2;
+    uint256 public _liquidityFee = 5;
+    uint256 public _marketingFee = 3;
+    uint256 public _wraithCharityFee = 3;
+    uint256 public _totalTaxPercent = 0;
+    uint256 private _prevTotalTaxPercent = 0;
 
-    uint256 public _taxFee = 2;
-    uint256 private _previousTaxFee = _taxFee;
-    
-    uint256 public _liquidityFee = 6;
-    uint256 private _previousLiquidityFee = _liquidityFee;
-    
-    uint256 public marketingDivisor = 3;
-    
     uint256 public _maxTxAmount = 3000000 * 10**6 * 10**9;
-    uint256 private minimumTokensBeforeSwap = 1 * 10**9; 
-    uint256 private buyBackUpperLimit = 1000000000 * 10**9;
+    uint256 private minimumTokensBeforeSwap = 50000 * 10**6 * 10**9; 
 
-    IUniswapV2Router02 public immutable uniswapV2Router;
-    address public immutable uniswapV2Pair;
+    IUniswapV2Router02 public uniswapV2Router;
+    address public uniswapV2Pair;
     
     bool inSwapAndLiquify;
     bool public swapAndLiquifyEnabled = true;
-    bool public buyBackEnabled = true;
+    bool public swapAndLiquifyByLimitOnly = false;
 
-    
-    event RewardLiquidityProviders(uint256 tokenAmount);
-    event BuyBackEnabledUpdated(bool enabled);
     event SwapAndLiquifyEnabledUpdated(bool enabled);
     event SwapAndLiquify(
         uint256 tokensSwapped,
@@ -494,18 +463,21 @@ contract WraithCoin is Context, IERC20, Ownable {
     }
     
     constructor () {
+
         _rOwned[_msgSender()] = _rTotal;
         
-        IUniswapV2Router02 _uniswapV2Router = IUniswapV2Router02(0x10ED43C718714eb63d5aA57B78B54704E256024E);
+        IUniswapV2Router02 _uniswapV2Router = IUniswapV2Router02(0x10ED43C718714eb63d5aA57B78B54704E256024E); //Prod
         uniswapV2Pair = IUniswapV2Factory(_uniswapV2Router.factory())
             .createPair(address(this), _uniswapV2Router.WETH());
 
         uniswapV2Router = _uniswapV2Router;
 
-        
         _isExcludedFromFee[owner()] = true;
         _isExcludedFromFee[address(this)] = true;
         
+        _totalTaxPercent = _burnFee.add(_liquidityFee).add(_marketingFee).add(_wraithCharityFee);
+        _prevTotalTaxPercent = _totalTaxPercent;
+
         emit Transfer(address(0), _msgSender(), _tTotal);
     }
 
@@ -560,70 +532,34 @@ contract WraithCoin is Context, IERC20, Ownable {
         return true;
     }
 
-    function isExcludedFromReward(address account) public view returns (bool) {
-        return _isExcluded[account];
-    }
-
-    function totalFees() public view returns (uint256) {
-        return _tFeeTotal;
-    }
-    
     function minimumTokensBeforeSwapAmount() public view returns (uint256) {
         return minimumTokensBeforeSwap;
     }
-    
-    function buyBackUpperLimitAmount() public view returns (uint256) {
-        return buyBackUpperLimit;
-    }
-    
-    function deliver(uint256 tAmount) public {
+
+    function deliver(uint256 tAmount) private {
         address sender = _msgSender();
         require(!_isExcluded[sender], "Excluded addresses cannot call this function");
-        (uint256 rAmount,,,,,) = _getValues(tAmount);
+        (uint256 rAmount,,,) = _getValues(tAmount);
         _rOwned[sender] = _rOwned[sender].sub(rAmount);
         _rTotal = _rTotal.sub(rAmount);
         _tFeeTotal = _tFeeTotal.add(tAmount);
     }
   
-
-    function reflectionFromToken(uint256 tAmount, bool deductTransferFee) public view returns(uint256) {
+    function reflectionFromToken(uint256 tAmount, bool deductTransferFee) private view returns(uint256) {
         require(tAmount <= _tTotal, "Amount must be less than supply");
         if (!deductTransferFee) {
-            (uint256 rAmount,,,,,) = _getValues(tAmount);
+            (uint256 rAmount,,,) = _getValues(tAmount);
             return rAmount;
         } else {
-            (,uint256 rTransferAmount,,,,) = _getValues(tAmount);
+            (,uint256 rTransferAmount,,) = _getValues(tAmount);
             return rTransferAmount;
         }
     }
 
-    function tokenFromReflection(uint256 rAmount) public view returns(uint256) {
+    function tokenFromReflection(uint256 rAmount) private view returns(uint256) {
         require(rAmount <= _rTotal, "Amount must be less than total reflections");
         uint256 currentRate =  _getRate();
         return rAmount.div(currentRate);
-    }
-
-    function excludeFromReward(address account) public onlyOwner() {
-
-        require(!_isExcluded[account], "Account is already excluded");
-        if(_rOwned[account] > 0) {
-            _tOwned[account] = tokenFromReflection(_rOwned[account]);
-        }
-        _isExcluded[account] = true;
-        _excluded.push(account);
-    }
-
-    function includeInReward(address account) external onlyOwner() {
-        require(_isExcluded[account], "Account is already excluded");
-        for (uint256 i = 0; i < _excluded.length; i++) {
-            if (_excluded[i] == account) {
-                _excluded[i] = _excluded[_excluded.length - 1];
-                _tOwned[account] = 0;
-                _isExcluded[account] = false;
-                _excluded.pop();
-                break;
-            }
-        }
     }
 
     function _approve(address owner, address spender, uint256 amount) private {
@@ -634,14 +570,12 @@ contract WraithCoin is Context, IERC20, Ownable {
         emit Approval(owner, spender, amount);
     }
 
-    function _transfer(
-        address from,
-        address to,
-        uint256 amount
-    ) private {
+    function _transfer(address from, address to, uint256 amount) private {
+
         require(from != address(0), "ERC20: transfer from the zero address");
         require(to != address(0), "ERC20: transfer to the zero address");
         require(amount > 0, "Transfer amount must be greater than zero");
+        
         if(from != owner() && to != owner()) {
             require(amount <= _maxTxAmount, "Transfer amount exceeds the maxTxAmount.");
         }
@@ -649,20 +583,11 @@ contract WraithCoin is Context, IERC20, Ownable {
         uint256 contractTokenBalance = balanceOf(address(this));
         bool overMinimumTokenBalance = contractTokenBalance >= minimumTokensBeforeSwap;
         
-        if (!inSwapAndLiquify && swapAndLiquifyEnabled) {
-            if (overMinimumTokenBalance) {
+        if (overMinimumTokenBalance && !inSwapAndLiquify && from != uniswapV2Pair && swapAndLiquifyEnabled) 
+        {
+            if(swapAndLiquifyByLimitOnly)
                 contractTokenBalance = minimumTokensBeforeSwap;
-                swapTokens(contractTokenBalance);    
-            }
-	        
-            uint256 balance = address(this).balance;
-            if (buyBackEnabled && balance > uint256(1 * 10**18)) {
-                
-                if (balance > buyBackUpperLimit)
-                    balance = buyBackUpperLimit;
-                
-                buyBackTokens(balance.div(100));
-            }
+            swapAndLiquify(contractTokenBalance);    
         }
         
         bool takeFee = true;
@@ -672,25 +597,47 @@ contract WraithCoin is Context, IERC20, Ownable {
             takeFee = false;
         }
         
-        _tokenTransfer(from,to,amount,takeFee);
+        _tokenTransfer(from, to, amount, takeFee);
     }
 
-    function swapTokens(uint256 contractTokenBalance) private lockTheSwap {
+    function swapAndLiquify(uint256 tAmount) private lockTheSwap {
        
-        uint256 initialBalance = address(this).balance;
-        swapTokensForEth(contractTokenBalance);
-        uint256 transferredBalance = address(this).balance.sub(initialBalance);
+        uint256 forBurn = tAmount.div(_totalTaxPercent).mul(_burnFee);
+        uint256 forLiquidity = tAmount.div(_totalTaxPercent).mul(_liquidityFee);
+        uint256 forWallets = tAmount.sub(forLiquidity).sub(forBurn);
 
-        //Send to Marketing address
-        transferToAddressETH(marketingAddress, transferredBalance.div(_liquidityFee).mul(marketingDivisor));
-        
-    }
+        if(forLiquidity > 0)
+        {
+            uint256 half = forLiquidity.div(2);
+            uint256 otherHalf = forLiquidity.sub(half);
     
+            uint256 initialBalance = address(this).balance;
+            swapTokensForEth(half); 
+            uint256 newBalance = address(this).balance.sub(initialBalance);
+            addLiquidity(otherHalf, newBalance);
+            emit SwapAndLiquify(half, newBalance, otherHalf);
+        }
 
-    function buyBackTokens(uint256 amount) private lockTheSwap {
-    	if (amount > 0) {
-    	    swapETHForTokens(amount);
-	    }
+        if(forWallets > 0 && _marketingFee.add(_wraithCharityFee) > 0)
+        {
+            uint256 initialBalance = address(this).balance;
+            swapTokensForEth(forWallets);
+            uint256 newBalance = address(this).balance.sub(initialBalance);
+    
+            uint256 marketingShare = newBalance.div(_marketingFee.add(_wraithCharityFee)).mul(_marketingFee);
+            uint256 wraithWalletShare = newBalance.sub(marketingShare);
+            
+            if(marketingShare > 0)
+                transferToAddressETH(marketingWalletAddress, marketingShare);
+            
+            if(wraithWalletShare > 0)
+                transferToAddressETH(wraithCharityWalletAddress, wraithWalletShare);
+        }
+        
+        if(forBurn > 0)
+        {
+            _tokenTransfer(address(this), deadAddress, forBurn, false);
+        }
     }
     
     function swapTokensForEth(uint256 tokenAmount) private {
@@ -712,24 +659,7 @@ contract WraithCoin is Context, IERC20, Ownable {
         
         emit SwapTokensForETH(tokenAmount, path);
     }
-    
-    function swapETHForTokens(uint256 amount) private {
-        // generate the uniswap pair path of token -> weth
-        address[] memory path = new address[](2);
-        path[0] = uniswapV2Router.WETH();
-        path[1] = address(this);
 
-      // make the swap
-        uniswapV2Router.swapExactETHForTokensSupportingFeeOnTransferTokens{value: amount}(
-            0, // accept any amount of Tokens
-            path,
-            deadAddress, // Burn address
-            block.timestamp.add(300)
-        );
-        
-        emit SwapETHForTokens(amount, path);
-    }
-    
     function addLiquidity(uint256 tokenAmount, uint256 ethAmount) private {
         // approve token transfer to cover all possible scenarios
         _approve(address(this), address(uniswapV2Router), tokenAmount);
@@ -764,74 +694,63 @@ contract WraithCoin is Context, IERC20, Ownable {
     }
 
     function _transferStandard(address sender, address recipient, uint256 tAmount) private {
-        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity) = _getValues(tAmount);
+        (uint256 rAmount, uint256 rTransferAmount, uint256 tTransferAmount, uint256 tLiquidity) = _getValues(tAmount);
         _rOwned[sender] = _rOwned[sender].sub(rAmount);
         _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);
         _takeLiquidity(tLiquidity);
-        _reflectFee(rFee, tFee);
         emit Transfer(sender, recipient, tTransferAmount);
     }
 
     function _transferToExcluded(address sender, address recipient, uint256 tAmount) private {
-        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity) = _getValues(tAmount);
+        (uint256 rAmount, uint256 rTransferAmount, uint256 tTransferAmount, uint256 tLiquidity) = _getValues(tAmount);
 	    _rOwned[sender] = _rOwned[sender].sub(rAmount);
         _tOwned[recipient] = _tOwned[recipient].add(tTransferAmount);
         _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);           
         _takeLiquidity(tLiquidity);
-        _reflectFee(rFee, tFee);
         emit Transfer(sender, recipient, tTransferAmount);
     }
 
     function _transferFromExcluded(address sender, address recipient, uint256 tAmount) private {
-        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity) = _getValues(tAmount);
+        (uint256 rAmount, uint256 rTransferAmount, uint256 tTransferAmount, uint256 tLiquidity) = _getValues(tAmount);
     	_tOwned[sender] = _tOwned[sender].sub(tAmount);
         _rOwned[sender] = _rOwned[sender].sub(rAmount);
         _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);   
         _takeLiquidity(tLiquidity);
-        _reflectFee(rFee, tFee);
         emit Transfer(sender, recipient, tTransferAmount);
     }
 
     function _transferBothExcluded(address sender, address recipient, uint256 tAmount) private {
-        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity) = _getValues(tAmount);
+        (uint256 rAmount, uint256 rTransferAmount, uint256 tTransferAmount, uint256 tLiquidity) = _getValues(tAmount);
     	_tOwned[sender] = _tOwned[sender].sub(tAmount);
         _rOwned[sender] = _rOwned[sender].sub(rAmount);
         _tOwned[recipient] = _tOwned[recipient].add(tTransferAmount);
         _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);        
         _takeLiquidity(tLiquidity);
-        _reflectFee(rFee, tFee);
         emit Transfer(sender, recipient, tTransferAmount);
     }
-
-    function _reflectFee(uint256 rFee, uint256 tFee) private {
-        _rTotal = _rTotal.sub(rFee);
-        _tFeeTotal = _tFeeTotal.add(tFee);
-    }
-
-    function _getValues(uint256 tAmount) private view returns (uint256, uint256, uint256, uint256, uint256, uint256) {
-        (uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity) = _getTValues(tAmount);
-        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee) = _getRValues(tAmount, tFee, tLiquidity, _getRate());
-        return (rAmount, rTransferAmount, rFee, tTransferAmount, tFee, tLiquidity);
-    }
-
-    function _getTValues(uint256 tAmount) private view returns (uint256, uint256, uint256) {
-        uint256 tFee = calculateTaxFee(tAmount);
-        uint256 tLiquidity = calculateLiquidityFee(tAmount);
-        uint256 tTransferAmount = tAmount.sub(tFee).sub(tLiquidity);
-        return (tTransferAmount, tFee, tLiquidity);
-    }
-
-    function _getRValues(uint256 tAmount, uint256 tFee, uint256 tLiquidity, uint256 currentRate) private pure returns (uint256, uint256, uint256) {
-        uint256 rAmount = tAmount.mul(currentRate);
-        uint256 rFee = tFee.mul(currentRate);
-        uint256 rLiquidity = tLiquidity.mul(currentRate);
-        uint256 rTransferAmount = rAmount.sub(rFee).sub(rLiquidity);
-        return (rAmount, rTransferAmount, rFee);
-    }
-
+    
     function _getRate() private view returns(uint256) {
         (uint256 rSupply, uint256 tSupply) = _getCurrentSupply();
         return rSupply.div(tSupply);
+    }
+    
+    function _getValues(uint256 tAmount) private view returns (uint256, uint256, uint256, uint256) {
+        (uint256 tTransferAmount, uint256 tLiquidity) = _getTValues(tAmount);
+        (uint256 rAmount, uint256 rTransferAmount) = _getRValues(tAmount, tLiquidity, _getRate());
+        return (rAmount, rTransferAmount, tTransferAmount, tLiquidity);
+    }
+
+    function _getTValues(uint256 tAmount) private view returns (uint256, uint256) {
+        uint256 tLiquidity = calculateFee(tAmount);
+        uint256 tTransferAmount = tAmount.sub(tLiquidity);
+        return (tTransferAmount, tLiquidity);
+    }
+
+    function _getRValues(uint256 tAmount, uint256 tLiquidity, uint256 currentRate) private pure returns (uint256, uint256) {
+        uint256 rAmount = tAmount.mul(currentRate);
+        uint256 rLiquidity = tLiquidity.mul(currentRate);
+        uint256 rTransferAmount = rAmount.sub(rLiquidity);
+        return (rAmount, rTransferAmount);
     }
 
     function _getCurrentSupply() private view returns(uint256, uint256) {
@@ -854,31 +773,19 @@ contract WraithCoin is Context, IERC20, Ownable {
             _tOwned[address(this)] = _tOwned[address(this)].add(tLiquidity);
     }
     
-    function calculateTaxFee(uint256 _amount) private view returns (uint256) {
-        return _amount.mul(_taxFee).div(
+    function calculateFee(uint256 tAmount) private view returns (uint256) {
+        return tAmount.mul(_totalTaxPercent).div(
             10**2
         );
     }
-    
-    function calculateLiquidityFee(uint256 _amount) private view returns (uint256) {
-        return _amount.mul(_liquidityFee).div(
-            10**2
-        );
-    }
-    
+
     function removeAllFee() private {
-        if(_taxFee == 0 && _liquidityFee == 0) return;
-        
-        _previousTaxFee = _taxFee;
-        _previousLiquidityFee = _liquidityFee;
-        
-        _taxFee = 0;
-        _liquidityFee = 0;
+        _prevTotalTaxPercent = _totalTaxPercent;
+        _totalTaxPercent = 0;
     }
     
     function restoreAllFee() private {
-        _taxFee = _previousTaxFee;
-        _liquidityFee = _previousLiquidityFee;
+        _totalTaxPercent = _prevTotalTaxPercent;
     }
 
     function isExcludedFromFee(address account) public view returns(bool) {
@@ -893,55 +800,51 @@ contract WraithCoin is Context, IERC20, Ownable {
         _isExcludedFromFee[account] = false;
     }
     
-    function setTaxFeePercent(uint256 taxFee) external onlyOwner() {
-        _taxFee = taxFee;
+    function setTaxes(uint256 newBurnFee, uint256 newLiquidityTax, uint256 newMarketingTax, uint256 newWraithCharityTax) external onlyOwner() {
+        _burnFee = newBurnFee;
+        _liquidityFee = newLiquidityTax;
+        _marketingFee = newMarketingTax;
+        _wraithCharityFee = newWraithCharityTax;
+        _totalTaxPercent = _burnFee.add(_liquidityFee).add(_marketingFee).add(_wraithCharityFee);
+        _prevTotalTaxPercent = _totalTaxPercent;
     }
-    
-    function setLiquidityFeePercent(uint256 liquidityFee) external onlyOwner() {
-        _liquidityFee = liquidityFee;
-    }
-    
+
     function setMaxTxAmount(uint256 maxTxAmount) external onlyOwner() {
         _maxTxAmount = maxTxAmount;
     }
-    
-    function setMarketingDivisor(uint256 divisor) external onlyOwner() {
-        marketingDivisor = divisor;
+
+    function setNumTokensBeforeSwap(uint256 newLimit) external onlyOwner() {
+        minimumTokensBeforeSwap = newLimit;
     }
 
-    function setNumTokensSellToAddToLiquidity(uint256 _minimumTokensBeforeSwap) external onlyOwner() {
-        minimumTokensBeforeSwap = _minimumTokensBeforeSwap;
-    }
-    
-     function setBuybackUpperLimit(uint256 buyBackLimit) external onlyOwner() {
-        buyBackUpperLimit = buyBackLimit * 10**18;
+    function setMarketingWalletAddress(address newAddress) external onlyOwner() {
+        marketingWalletAddress = payable(newAddress);
     }
 
-    function setMarketingAddress(address _marketingAddress) external onlyOwner() {
-        marketingAddress = payable(_marketingAddress);
+    function setWraithCharityWalletAddress(address newAddress) external onlyOwner() {
+        wraithCharityWalletAddress = payable(newAddress);
     }
 
     function setSwapAndLiquifyEnabled(bool _enabled) public onlyOwner {
         swapAndLiquifyEnabled = _enabled;
         emit SwapAndLiquifyEnabledUpdated(_enabled);
     }
-    
-    function setBuyBackEnabled(bool _enabled) public onlyOwner {
-        buyBackEnabled = _enabled;
-        emit BuyBackEnabledUpdated(_enabled);
+
+    function setSwapAndLiquifyByLimitOnly(bool newValue) public onlyOwner {
+        swapAndLiquifyByLimitOnly = newValue;
     }
-    
+
     function prepareForPreSale() external onlyOwner {
         setSwapAndLiquifyEnabled(false);
-        _taxFee = 0;
-        _liquidityFee = 0;
+        _totalTaxPercent = 0;
+        _prevTotalTaxPercent = 0;
         _maxTxAmount = 1000000000 * 10**6 * 10**9;
     }
     
-    function afterPreSale() external onlyOwner {
+    function prepareForLaunch() external onlyOwner {
         setSwapAndLiquifyEnabled(true);
-        _taxFee = 2;
-        _liquidityFee = 6;
+        _totalTaxPercent = _burnFee.add(_liquidityFee).add(_marketingFee).add(_wraithCharityFee);
+        _prevTotalTaxPercent = _totalTaxPercent;
         _maxTxAmount = 3000000 * 10**6 * 10**9;
     }
     
@@ -949,6 +852,22 @@ contract WraithCoin is Context, IERC20, Ownable {
         recipient.transfer(amount);
     }
     
+    function changeRouterVersion(address newRouterAddress) public onlyOwner returns(address newPairAddress) {
+
+        IUniswapV2Router02 _uniswapV2Router = IUniswapV2Router02(newRouterAddress); 
+
+        newPairAddress = IUniswapV2Factory(_uniswapV2Router.factory()).getPair(address(this), _uniswapV2Router.WETH());
+
+        if(newPairAddress == address(0)) //Create If Doesnt exist
+        {
+            newPairAddress = IUniswapV2Factory(_uniswapV2Router.factory())
+                .createPair(address(this), _uniswapV2Router.WETH());
+        }
+
+        uniswapV2Pair = newPairAddress; //Set new pair address
+        uniswapV2Router = _uniswapV2Router; //Set new router address
+    }
+
      //to recieve ETH from uniswapV2Router when swaping
     receive() external payable {}
 }
