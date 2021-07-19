@@ -1,1 +1,1 @@
-# WraithCoin
+# Project Wraith
